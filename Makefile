@@ -1,7 +1,7 @@
 # Makefile to compile nanopond.c
 
 CC=gcc
-CFLAGS=-O6 -march=athlon-mp -mtune=athlon-mp -mmmx -msse -fomit-frame-pointer -fprofile-use -ftree-vectorize -funroll-loops -fstrength-reduce -ftree-vectorizer-verbose=5 -Wall -pipe -s
+CFLAGS=-O6 -fomit-frame-pointer -ftree-vectorize -Wall -pipe
 
 all:
 	$(CC) $(CFLAGS) -o nanopond nanopond.c -lSDL
