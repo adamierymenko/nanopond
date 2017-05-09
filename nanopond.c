@@ -1,21 +1,8 @@
 /* *********************************************************************** */
 /*                                                                         */
-/* Nanopond version 1.9 -- A teeny tiny artificial life virtual machine    */
-/* Copyright (C) 2005 Adam Ierymenko - http://www.greythumb.com/people/api */
-/*                                                                         */
-/* This program is free software; you can redistribute it and/or modify    */
-/* it under the terms of the GNU General Public License as published by    */
-/* the Free Software Foundation; either version 2 of the License, or       */
-/* (at your option) any later version.                                     */
-/*                                                                         */
-/* This program is distributed in the hope that it will be useful,         */
-/* but WITHOUT ANY WARRANTY; without even the implied warranty of          */
-/* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           */
-/* GNU General Public License for more details.                            */
-/*                                                                         */
-/* You should have received a copy of the GNU General Public License       */
-/* along with this program; if not, write to the Free Software             */
-/* Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110 USA     */
+/* Nanopond version 2.0 -- A teeny tiny artificial life virtual machine    */
+/* Copyright (C) Adam Ierymenko                                            */
+/* MIT license -- see LICENSE.txt                                          */
 /*                                                                         */
 /* *********************************************************************** */
 
@@ -51,6 +38,8 @@
  *       are currently supported), and a few speed optimizations. Also
  *       changed visualization so that cells with generations less than 2
  *       are no longer shown.
+ * 2.0 - Ported to SDL2 by Charles Huber, and added simple pthread based
+ *       threading to make it take advantage of modern machines.
  */
 
 /*
