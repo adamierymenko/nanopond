@@ -91,6 +91,8 @@
  *
  * - Every REPORT_FREQUENCY clock ticks a line of comma seperated output
  *   is printed to STDOUT with some statistics about what's going on.
+ * - Every DUMP_FREQUENCY clock ticks, all viable replicators (cells whose
+ *   generation is >= 2) are dumped to a file on disk.
  * - Every INFLOW_FREQUENCY clock ticks a random x,y location is picked,
  *   energy is added (see INFLOW_RATE_MEAN and INFLOW_RATE_DEVIATION)
  *   and it's genome is filled with completely random bits.  Statistics
@@ -230,11 +232,26 @@
 /* Tunable parameters                                                      */
 /* ----------------------------------------------------------------------- */
 
+/* Iteration to stop at. Comment this out to run forever. */
+/* #define STOP_AT 150000000000ULL */
+
 /* Frequency of comprehensive reports-- lower values will provide more
  * info while slowing down the simulation. Higher values will give less
  * frequent updates. */
 /* This is also the frequency of screen refreshes if SDL is enabled. */
 #define REPORT_FREQUENCY 100000
+
+/* Uncomment this to save a BMP image of the screen every
+ * REPORT_FREQUENCY ticks. Requires that SDL (see below) be enabled. */
+#define SAVE_BMPS 1
+
+/* Frequency at which to dump all viable replicators (generation > 2)
+ * to a file named <clock>.dump in the current directory.  Comment
+ * out to disable. The cells are dumped in hexadecimal, which is
+ * semi-human-readable if you look at the big switch() statement
+ * in the main loop to see what instruction is signified by each
+ * four-bit value. */
+#define DUMP_FREQUENCY 100000000
 
 /* Mutation rate -- range is from 0 (none) to 0xffffffff (all mutations!) */
 /* To get it from a float probability from 0.0 to 1.0, multiply it by
@@ -272,9 +289,6 @@
 /* Comment this out to compile without SDL visualization support. */
 #define USE_SDL 1
 
-/* Define this to use threads, and how many threads to create */
-#define USE_PTHREADS_COUNT 4
-
 /* ----------------------------------------------------------------------- */
 
 #include <stdint.h>
@@ -282,31 +296,126 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-#ifdef USE_PTHREADS_COUNT
-#include <pthread.h>
-#endif
-
 #ifdef USE_SDL
 #ifdef _MSC_VER
 #include <SDL.h>
 #else
-#include <SDL2/SDL.h>
+#include <SDL/SDL.h>
 #endif /* _MSC_VER */
 #endif /* USE_SDL */
 
-volatile uint64_t prngState[2];
-static inline uintptr_t getRandom()
+/* ----------------------------------------------------------------------- */
+/* This is the Mersenne Twister by Makoto Matsumoto and Takuji Nishimura   */
+/* http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/MT2002/emt19937ar.html  */
+/* ----------------------------------------------------------------------- */
+
+/* A few very minor changes were made by me - Adam */
+
+/* 
+   A C-program for MT19937, with initialization improved 2002/1/26.
+   Coded by Takuji Nishimura and Makoto Matsumoto.
+
+   Before using, initialize the state by using init_genrand(seed)  
+   or init_by_array(init_key, key_length).
+
+   Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
+   All rights reserved.                          
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the following conditions
+   are met:
+
+     1. Redistributions of source code must retain the above copyright
+        notice, this list of conditions and the following disclaimer.
+
+     2. Redistributions in binary form must reproduce the above copyright
+        notice, this list of conditions and the following disclaimer in the
+        documentation and/or other materials provided with the distribution.
+
+     3. The names of its contributors may not be used to endorse or promote 
+        products derived from this software without specific prior written 
+        permission.
+
+   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+   A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+   CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+   PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+   PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+   LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+   Any feedback is very welcome.
+   http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/emt.html
+   email: m-mat @ math.sci.hiroshima-u.ac.jp (remove space)
+*/
+
+/* Period parameters */  
+#define N 624
+#define M 397
+#define MATRIX_A 0x9908b0dfUL   /* constant vector a */
+#define UPPER_MASK 0x80000000UL /* most significant w-r bits */
+#define LOWER_MASK 0x7fffffffUL /* least significant r bits */
+
+static unsigned long mt[N]; /* the array for the state vector  */
+static int mti=N+1; /* mti==N+1 means mt[N] is not initialized */
+
+/* initializes mt[N] with a seed */
+static void init_genrand(unsigned long s)
 {
-  // https://en.wikipedia.org/wiki/Xorshift#xorshift.2B
-  uint64_t x = prngState[0];
-  const uint64_t y = prngState[1];
-  prngState[0] = y;
-  x ^= x << 23;
-  const uint64_t z = x ^ y ^ (x >> 17) ^ (y >> 26);
-  prngState[1] = z;
-  return (uintptr_t)(z + y);
+    mt[0]= s & 0xffffffffUL;
+    for (mti=1; mti<N; mti++) {
+        mt[mti] = 
+	    (1812433253UL * (mt[mti-1] ^ (mt[mti-1] >> 30)) + mti); 
+        /* See Knuth TAOCP Vol2. 3rd Ed. P.106 for multiplier. */
+        /* In the previous versions, MSBs of the seed affect   */
+        /* only MSBs of the array mt[].                        */
+        /* 2002/01/09 modified by Makoto Matsumoto             */
+        mt[mti] &= 0xffffffffUL;
+        /* for >32 bit machines */
+    }
 }
+
+/* generates a random number on [0,0xffffffff]-interval */
+static inline uint32_t genrand_int32()
+{
+    uint32_t y;
+    static uint32_t mag01[2]={0x0UL, MATRIX_A};
+    /* mag01[x] = x * MATRIX_A  for x=0,1 */
+
+    if (mti >= N) { /* generate N words at one time */
+        int kk;
+
+        for (kk=0;kk<N-M;kk++) {
+            y = (mt[kk]&UPPER_MASK)|(mt[kk+1]&LOWER_MASK);
+            mt[kk] = mt[kk+M] ^ (y >> 1) ^ mag01[y & 0x1UL];
+        }
+        for (;kk<N-1;kk++) {
+            y = (mt[kk]&UPPER_MASK)|(mt[kk+1]&LOWER_MASK);
+            mt[kk] = mt[kk+(M-N)] ^ (y >> 1) ^ mag01[y & 0x1UL];
+        }
+        y = (mt[N-1]&UPPER_MASK)|(mt[0]&LOWER_MASK);
+        mt[N-1] = mt[M-1] ^ (y >> 1) ^ mag01[y & 0x1UL];
+
+        mti = 0;
+    }
+  
+    y = mt[mti++];
+
+    /* Tempering */
+    y ^= (y >> 11);
+    y ^= (y << 7) & 0x9d2c5680UL;
+    y ^= (y << 15) & 0xefc60000UL;
+    y ^= (y >> 18);
+
+    return y;
+}
+
+/* ----------------------------------------------------------------------- */
 
 /* Pond depth in machine-size words.  This is calculated from
  * POND_DEPTH and the size of the machine word. (The multiplication
@@ -355,29 +464,34 @@ struct Cell
   /* Memory space for cell genome (genome is stored as four
    * bit instructions packed into machine size words) */
   uintptr_t genome[POND_DEPTH_SYSWORDS];
-
-#ifdef USE_PTHREADS_COUNT
-  pthread_mutex_t lock;
-#endif
 };
 
 /* The pond is a 2D array of cells */
-static struct Cell pond[POND_SIZE_X][POND_SIZE_Y];
-
-/* This is used to generate unique cell IDs */
-static volatile uint64_t cellIdCounter = 0;
+struct Cell pond[POND_SIZE_X][POND_SIZE_Y];
 
 /* Currently selected color scheme */
 enum { KINSHIP,LINEAGE,MAX_COLOR_SCHEME } colorScheme = KINSHIP;
-static const char *colorSchemeName[2] = { "KINSHIP", "LINEAGE" };
+const char *colorSchemeName[2] = { "KINSHIP", "LINEAGE" };
 
-#ifdef USE_SDL
-static SDL_Window *window;
-static SDL_Surface *winsurf;
-static SDL_Surface *screen;
-#endif
+/**
+ * Get a random number
+ *
+ * @return Random number
+ */
+static inline uintptr_t getRandom()
+{
+  /* A good optimizing compiler should optimize out this if */
+  /* This is to make it work on 64-bit boxes */
+  if (sizeof(uintptr_t) == 8)
+    return (uintptr_t)((((uint64_t)genrand_int32()) << 32) ^ ((uint64_t)genrand_int32()));
+  else return (uintptr_t)genrand_int32();
+}
 
-volatile struct {
+/**
+ * Structure for keeping some running tally type statistics
+ */
+struct PerReportStatCounters
+{
   /* Counts for the number of times each instruction was
    * executed since the last report. */
   double instructionExecutions[16];
@@ -393,8 +507,16 @@ volatile struct {
   
   /* Number of successful SHARE operations */
   uintptr_t viableCellShares;
-} statCounters;
+};
 
+/* Global statistics counters */
+struct PerReportStatCounters statCounters;
+
+/**
+ * Output a line of comma-seperated statistics data
+ *
+ * @param clock Current clock
+ */
 static void doReport(const uint64_t clock)
 {
   static uint64_t lastTotalViableReplicators = 0;
@@ -459,6 +581,67 @@ static void doReport(const uint64_t clock)
 }
 
 /**
+ * Dumps all viable (generation > 2) cells to a file called <clock>.dump
+ *
+ * @param clock Clock value
+ */
+static void doDump(const uint64_t clock)
+{
+  char buf[POND_DEPTH*2];
+  FILE *d;
+  uintptr_t x,y,wordPtr,shiftPtr,inst,stopCount,i;
+  struct Cell *pptr;
+  
+  sprintf(buf,"%llu.dump.csv",clock);
+  d = fopen(buf,"w");
+  if (!d) {
+    fprintf(stderr,"[WARNING] Could not open %s for writing.\n",buf);
+    return;
+  }
+  
+  fprintf(stderr,"[INFO] Dumping viable cells to %s\n",buf);
+  
+  for(x=0;x<POND_SIZE_X;++x) {
+    for(y=0;y<POND_SIZE_Y;++y) {
+      pptr = &pond[x][y];
+      if (pptr->energy&&(pptr->generation > 2)) {
+        fprintf(d,"%llu,%llu,%llu,%llu,",
+          (uint64_t)pptr->ID,
+          (uint64_t)pptr->parentID,
+          (uint64_t)pptr->lineage,
+          (uint64_t)pptr->generation);
+        wordPtr = 0;
+        shiftPtr = 0;
+        stopCount = 0;
+        for(i=0;i<POND_DEPTH;++i) {
+          inst = (pptr->genome[wordPtr] >> shiftPtr) & 0xf;
+          /* Four STOP instructions in a row is considered the end.
+           * The probability of this being wrong is *very* small, and
+           * could only occur if you had four STOPs in a row inside
+           * a LOOP/REP pair that's always false. In any case, this
+           * would always result in our *underestimating* the size of
+           * the genome and would never result in an overestimation. */
+          fprintf(d,"%x",inst);
+          if (inst == 0xf) { /* STOP */
+            if (++stopCount >= 4)
+              break;
+          } else stopCount = 0;
+          if ((shiftPtr += 4) >= SYSWORD_BITS) {
+            if (++wordPtr >= POND_DEPTH_SYSWORDS) {
+              wordPtr = 0;
+              shiftPtr = 4;
+            } else shiftPtr = 0;
+          }
+        }
+        fwrite("\n",1,1,d);
+      }
+    }
+  }
+  
+  fclose(d);
+}
+
+/**
  * Dumps the genome of a cell to a file.
  *
  * @param file Destination
@@ -480,7 +663,7 @@ static void dumpCell(FILE *file, struct Cell *cell)
        * a LOOP/REP pair that's always false. In any case, this
        * would always result in our *underestimating* the size of
        * the genome and would never result in an overestimation. */
-      fprintf(file,"%x",(unsigned int)inst);
+      fprintf(file,"%x",inst);
       if (inst == 0xf) { /* STOP */
         if (++stopCount >= 4)
           break;
@@ -495,7 +678,15 @@ static void dumpCell(FILE *file, struct Cell *cell)
   }
   fprintf(file,"\n");
 }
-
+  
+/**
+ * Get a neighbor in the pond
+ *
+ * @param x Starting X position
+ * @param y Starting Y position
+ * @param dir Direction to get neighbor from
+ * @return Pointer to neighboring cell
+ */
 static inline struct Cell *getNeighbor(const uintptr_t x,const uintptr_t y,const uintptr_t dir)
 {
   /* Space is toroidal; it wraps at edges */
@@ -512,6 +703,14 @@ static inline struct Cell *getNeighbor(const uintptr_t x,const uintptr_t y,const
   return &pond[x][y]; /* This should never be reached */
 }
 
+/**
+ * Determines if c1 is allowed to access c2
+ *
+ * @param c2 Cell being accessed
+ * @param c1guess c1's "guess"
+ * @param sense The "sense" of this interaction
+ * @return True or false (1 or 0)
+ */
 static inline int accessAllowed(struct Cell *const c2,const uintptr_t c1guess,int sense)
 {
   /* Access permission is more probable if they are more similar in sense 0,
@@ -520,6 +719,12 @@ static inline int accessAllowed(struct Cell *const c2,const uintptr_t c1guess,in
   return sense ? (((getRandom() & 0xf) >= BITS_IN_FOURBIT_WORD[(c2->genome[0] & 0xf) ^ (c1guess & 0xf)])||(!c2->parentID)) : (((getRandom() & 0xf) <= BITS_IN_FOURBIT_WORD[(c2->genome[0] & 0xf) ^ (c1guess & 0xf)])||(!c2->parentID));
 }
 
+/**
+ * Gets the color that a cell should be
+ *
+ * @param c Cell to get color for
+ * @return 8-bit color value
+ */
 static inline uint8_t getColor(struct Cell *c)
 {
   uintptr_t i,j,word,sum,opcode,skipnext;
@@ -539,7 +744,7 @@ static inline uint8_t getColor(struct Cell *c)
          */
         if (c->generation > 1) {
           sum = 0;
-          skipnext = 0;
+          skipnext = 1; /* Skip logo, which is the first word */
           for(i=0;i<POND_DEPTH_SYSWORDS&&(c->genome[i] != ~((uintptr_t)0));++i) {
             word = c->genome[i];
             for(j=0;j<SYSWORD_BITS/4;++j,word >>= 4) {
@@ -576,15 +781,67 @@ static inline uint8_t getColor(struct Cell *c)
   return 0; /* Cells with no energy are black */
 }
 
-static void *run(void *targ)
+/**
+ * Main method
+ *
+ * @param argc Number of args
+ * @param argv Argument array
+ */
+int main(int argc,char **argv)
 {
-  const uintptr_t threadNo = (uintptr_t)targ;
-  uintptr_t x,y,i;
-  uintptr_t clock = 0;
-
+  char tmpbuf[1024];
+  uintptr_t i,x,y;
+  
   /* Buffer used for execution output of candidate offspring */
   uintptr_t outputBuf[POND_DEPTH_SYSWORDS];
+  
+  /* Seed and init the random number generator */
+  init_genrand(time(NULL));
+  for(i=0;i<1024;++i)
+    getRandom();
 
+  /* Reset per-report stat counters */
+  for(x=0;x<sizeof(statCounters);++x)
+    ((uint8_t *)&statCounters)[x] = (uint8_t)0;
+  
+  /* Set up SDL if we're using it */
+#ifdef USE_SDL
+  SDL_Surface *screen;
+  SDL_Event sdlEvent;
+  if (SDL_Init(SDL_INIT_VIDEO) < 0 ) {
+    fprintf(stderr,"*** Unable to init SDL: %s ***\n",SDL_GetError());
+    exit(1);
+  }
+  atexit(SDL_Quit);
+  SDL_WM_SetCaption("nanopond","nanopond");
+  screen = SDL_SetVideoMode(POND_SIZE_X,POND_SIZE_Y,8,SDL_SWSURFACE);
+  if (!screen) {
+    fprintf(stderr, "*** Unable to create SDL window: %s ***\n", SDL_GetError());
+    exit(1);
+  }
+  const uintptr_t sdlPitch = screen->pitch;
+#endif /* USE_SDL */
+ 
+  /* Clear the pond and initialize all genomes
+   * to 0xffff... */
+  for(x=0;x<POND_SIZE_X;++x) {
+    for(y=0;y<POND_SIZE_Y;++y) {
+      pond[x][y].ID = 0;
+      pond[x][y].parentID = 0;
+      pond[x][y].lineage = 0;
+      pond[x][y].generation = 0;
+      pond[x][y].energy = 0;
+      for(i=0;i<POND_DEPTH_SYSWORDS;++i)
+        pond[x][y].genome[i] = ~((uintptr_t)0);
+    }
+  }
+  
+  /* Clock is incremented on each core loop */
+  uint64_t clock = 0;
+  
+  /* This is used to generate unique cell IDs */
+  uint64_t cellIdCounter = 0;
+  
   /* Miscellaneous variables used in the loop */
   uintptr_t currentWord,wordPtr,shiftPtr,inst,tmp;
   struct Cell *pptr,*tmpptr;
@@ -609,30 +866,34 @@ static void *run(void *targ)
   /* It is incremented to track the depth of a nested set
    * of LOOP/REP pairs in false state. */
   uintptr_t falseLoopDepth;
-
-#ifdef USE_SDL
-  SDL_Event sdlEvent;
-  const uintptr_t sdlPitch = screen->pitch;
-#endif
-
+  
   /* If this is nonzero, cell execution stops. This allows us
    * to avoid the ugly use of a goto to exit the loop. :) */
   int stop;
-
+  
   /* Main loop */
   for(;;) {
+    /* Stop at STOP_AT if defined */
+#ifdef STOP_AT
+    if (clock >= STOP_AT) {
+      /* Also do a final dump if dumps are enabled */
+#ifdef DUMP_FREQUENCY
+      doDump(clock);
+#endif /* DUMP_FREQUENCY */
+      fprintf(stderr,"[QUIT] STOP_AT clock value reached\n");
+      break;
+    }
+#endif /* STOP_AT */
+
     /* Increment clock and run reports periodically */
     /* Clock is incremented at the start, so it starts at 1 */
-    ++clock;
-    if ((threadNo == 0)&&(!(clock % REPORT_FREQUENCY))) {
+    if (!(++clock % REPORT_FREQUENCY)) {
       doReport(clock);
       /* SDL display is also refreshed every REPORT_FREQUENCY */
 #ifdef USE_SDL
       while (SDL_PollEvent(&sdlEvent)) {
         if (sdlEvent.type == SDL_QUIT) {
           fprintf(stderr,"[QUIT] Quit signal received!\n");
-          SDL_FreeSurface(screen);
-          SDL_DestroyWindow(window);
           exit(0);
         } else if (sdlEvent.type == SDL_MOUSEBUTTONDOWN) {
           switch (sdlEvent.button.button) {
@@ -651,10 +912,19 @@ static void *run(void *targ)
           }
         }
       }
-      SDL_BlitSurface(screen, NULL, winsurf, NULL);
-      SDL_UpdateWindowSurface(window);
+      SDL_UpdateRect(screen,0,0,POND_SIZE_X,POND_SIZE_Y);
+#ifdef SAVE_BMPS
+      sprintf(tmpbuf,"%llu.bmp",clock);
+      SDL_SaveBMP(screen,tmpbuf);
+#endif /* SAVE_BMPS */
 #endif /* USE_SDL */
     }
+
+    /* Periodically dump the viable population if defined */
+#ifdef DUMP_FREQUENCY
+    if (!(clock % DUMP_FREQUENCY))
+      doDump(clock);
+#endif /* DUMP_FREQUENCY */
 
     /* Introduce a random cell somewhere with a given energy level */
     /* This is called seeding, and introduces both energy and
@@ -664,11 +934,6 @@ static void *run(void *targ)
       x = getRandom() % POND_SIZE_X;
       y = getRandom() % POND_SIZE_Y;
       pptr = &pond[x][y];
-
-#ifdef USE_PTHREADS_COUNT
-      pthread_mutex_lock(&(pptr->lock));
-#endif
-
       pptr->ID = cellIdCounter;
       pptr->parentID = 0;
       pptr->lineage = cellIdCounter;
@@ -681,21 +946,20 @@ static void *run(void *targ)
       for(i=0;i<POND_DEPTH_SYSWORDS;++i) 
         pptr->genome[i] = getRandom();
       ++cellIdCounter;
-    
+      
       /* Update the random cell on SDL screen if viz is enabled */
 #ifdef USE_SDL
+      if (SDL_MUSTLOCK(screen))
+        SDL_LockSurface(screen);
       ((uint8_t *)screen->pixels)[x + (y * sdlPitch)] = getColor(pptr);
+      if (SDL_MUSTLOCK(screen))
+        SDL_UnlockSurface(screen);
 #endif /* USE_SDL */
-
-#ifdef USE_PTHREADS_COUNT
-      pthread_mutex_unlock(&(pptr->lock));
-#endif
     }
-
+    
     /* Pick a random cell to execute */
-    i = getRandom();
-    x = i % POND_SIZE_X;
-    y = ((i / POND_SIZE_X) >> 1) % POND_SIZE_Y;
+    x = getRandom() % POND_SIZE_X;
+    y = getRandom() % POND_SIZE_Y;
     pptr = &pond[x][y];
 
     /* Reset the state of the VM prior to execution */
@@ -710,11 +974,7 @@ static void *run(void *targ)
     facing = 0;
     falseLoopDepth = 0;
     stop = 0;
-
-#ifdef USE_PTHREADS_COUNT
-    pthread_mutex_lock(&(pptr->lock));
-#endif
-
+    
     /* We use a currentWord buffer to hold the word we're
      * currently working on.  This speeds things up a bit
      * since it eliminates a pointer dereference in the
@@ -722,15 +982,15 @@ static void *run(void *targ)
      * whenever it might have changed... take a look at
      * the code. :) */
     currentWord = pptr->genome[0];
-
+    
     /* Keep track of how many cells have been executed */
     statCounters.cellExecutions += 1.0;
 
     /* Core execution loop */
-    while ((pptr->energy)&&(!stop)) {
+    while (pptr->energy&&(!stop)) {
       /* Get the next instruction */
       inst = (currentWord >> shiftPtr) & 0xf;
-
+      
       /* Randomly frob either the instruction or the register with a
        * probability defined by MUTATION_RATE. This introduces variation,
        * and since the variation is introduced into the state of the VM
@@ -743,10 +1003,10 @@ static void *run(void *targ)
           inst = tmp & 0xf; /* Only the first four bits are used here */
         else reg = tmp & 0xf;
       }
-
+      
       /* Each instruction processed costs one unit of energy */
       --pptr->energy;
-
+      
       /* Execute the instruction */
       if (falseLoopDepth) {
         /* Skip forward to matching REP if we're in a false loop. */
@@ -870,6 +1130,7 @@ static void *run(void *targ)
             if (accessAllowed(tmpptr,reg,1)) {
               if (tmpptr->generation > 2)
                 ++statCounters.viableCellShares;
+
               tmp = pptr->energy + tmpptr->energy;
               tmpptr->energy = tmp / 2;
               pptr->energy = tmp - tmpptr->energy;
@@ -891,11 +1152,7 @@ static void *run(void *targ)
         currentWord = pptr->genome[wordPtr];
       }
     }
-
-#ifdef USE_PTHREADS_COUNT
-    pthread_mutex_unlock(&(pptr->lock));
-#endif
-
+    
     /* Copy outputBuf into neighbor if access is permitted and there
      * is energy there to make something happen. There is no need
      * to copy to a cell with no energy, since anything copied there
@@ -903,9 +1160,6 @@ static void *run(void *targ)
      * junk eventually. See the seeding code in the main loop above. */
     if ((outputBuf[0] & 0xff) != 0xff) {
       tmpptr = getNeighbor(x,y,facing);
-#ifdef USE_PTHREADS_COUNT
-      pthread_mutex_lock(&(tmpptr->lock));
-#endif
       if ((tmpptr->energy)&&accessAllowed(tmpptr,reg,0)) {
         /* Log it if we're replacing a viable cell */
         if (tmpptr->generation > 2)
@@ -918,13 +1172,12 @@ static void *run(void *targ)
         for(i=0;i<POND_DEPTH_SYSWORDS;++i)
           tmpptr->genome[i] = outputBuf[i];
       }
-#ifdef USE_PTHREADS_COUNT
-      pthread_mutex_unlock(&(tmpptr->lock));
-#endif
     }
 
     /* Update the neighborhood on SDL screen to show any changes. */
 #ifdef USE_SDL
+    if (SDL_MUSTLOCK(screen))
+      SDL_LockSurface(screen);
     ((uint8_t *)screen->pixels)[x + (y * sdlPitch)] = getColor(pptr);
     if (x) {
       ((uint8_t *)screen->pixels)[(x-1) + (y * sdlPitch)] = getColor(&pond[x-1][y]);
@@ -944,103 +1197,11 @@ static void *run(void *targ)
       ((uint8_t *)screen->pixels)[x + ((POND_SIZE_Y-1) * sdlPitch)] = getColor(&pond[x][POND_SIZE_Y-1]);
       ((uint8_t *)screen->pixels)[x + sdlPitch] = getColor(&pond[x][1]);
     }
+    if (SDL_MUSTLOCK(screen))
+      SDL_UnlockSurface(screen);
 #endif /* USE_SDL */
   }
-
-  return (void *)0;
-}
-
-/**
- * Main method
- *
- * @param argc Number of args
- * @param argv Argument array
- */
-int main(int argc,char **argv)
-{
-  uintptr_t i,x,y;
-
-  /* Seed and init the random number generator */
-  prngState[0] = (uint64_t)time(NULL);
-  srand(time(NULL));
-  prngState[1] = (uint64_t)rand();
-
-  /* Reset per-report stat counters */
-  for(x=0;x<sizeof(statCounters);++x)
-    ((uint8_t *)&statCounters)[x] = (uint8_t)0;
   
-  /* Set up SDL if we're using it */
-#ifdef USE_SDL
-  if (SDL_Init(SDL_INIT_VIDEO) < 0 ) {
-    fprintf(stderr,"*** Unable to init SDL: %s ***\n",SDL_GetError());
-    exit(1);
-  }
-  atexit(SDL_Quit);
-  window = SDL_CreateWindow("nanopond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, POND_SIZE_X, POND_SIZE_Y, 0);
-  if (!window) {
-    fprintf(stderr, "*** Unable to create SDL window: %s ***\n", SDL_GetError());
-    exit(1);
-  }
-  winsurf = SDL_GetWindowSurface(window);
-  if (!winsurf) {
-    fprintf(stderr, "*** Unable to get SDL window surface: %s ***\n", SDL_GetError());
-    exit(1);
-  }
-  screen = SDL_CreateRGBSurface(0, POND_SIZE_X, POND_SIZE_Y, 8, 0, 0, 0, 0);
-  if (!screen) {
-    fprintf(stderr, "*** Unable to create SDL window surface: %s ***\n", SDL_GetError());
-    exit(1);
-  }
-  /* Set palette entries to match the default SDL 1.2.15 palette */
-  {
-    Uint8 r[8] = {0, 36, 73, 109, 146, 182, 219, 255};
-    Uint8 g[8] = {0, 36, 73, 109, 146, 182, 219, 255};
-    Uint8 b[4] = {0, 85, 170, 255};
-    int curColor = 0;
-    for(unsigned int i = 0; i < 8; ++i) {
-      for(unsigned int j = 0; j < 8; ++j) {
-        for(unsigned int k = 0; k < 4; ++k) {
-          SDL_Color color = {r[i], g[j], b[k], 255};
-          SDL_SetPaletteColors(screen->format->palette, &color, curColor, 1);
-          curColor++;
-        }
-      }
-    }
-  }
-#endif /* USE_SDL */
- 
-  /* Clear the pond and initialize all genomes
-   * to 0xffff... */
-  for(x=0;x<POND_SIZE_X;++x) {
-    for(y=0;y<POND_SIZE_Y;++y) {
-      pond[x][y].ID = 0;
-      pond[x][y].parentID = 0;
-      pond[x][y].lineage = 0;
-      pond[x][y].generation = 0;
-      pond[x][y].energy = 0;
-      for(i=0;i<POND_DEPTH_SYSWORDS;++i)
-        pond[x][y].genome[i] = ~((uintptr_t)0);
-#ifdef USE_PTHREADS_COUNT
-      pthread_mutex_init(&(pond[x][y].lock),0);
-#endif
-    }
-  }
-
-#ifdef USE_PTHREADS_COUNT
-  pthread_t threads[USE_PTHREADS_COUNT];
-  for(i=1;i<USE_PTHREADS_COUNT;++i)
-    pthread_create(&threads[i],0,run,(void *)i);
-  run((void *)0);
-  for(i=1;i<USE_PTHREADS_COUNT;++i)
-    pthread_join(threads[i],(void **)0);
-#else
-  run((void *)0);
-#endif
-
-#ifdef USE_SDL
-  SDL_FreeSurface(screen);
-  SDL_DestroyWindow(window);
-#endif /* USE_SDL */
   exit(0);
   return 0; /* Make compiler shut up */
 }
