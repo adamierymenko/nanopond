@@ -273,7 +273,7 @@
 #define USE_SDL 1
 
 /* Define this to use threads, and how many threads to create */
-#define USE_PTHREADS_COUNT 4
+#define USE_PTHREADS_COUNT 6
 
 /* ----------------------------------------------------------------------- */
 
@@ -576,6 +576,8 @@ static inline uint8_t getColor(struct Cell *c)
   return 0; /* Cells with no energy are black */
 }
 
+volatile int exitNow = 0;
+
 static void *run(void *targ)
 {
   const uintptr_t threadNo = (uintptr_t)targ;
@@ -620,7 +622,7 @@ static void *run(void *targ)
   int stop;
 
   /* Main loop */
-  for(;;) {
+  while (!exitNow) {
     /* Increment clock and run reports periodically */
     /* Clock is incremented at the start, so it starts at 1 */
     ++clock;
@@ -631,9 +633,7 @@ static void *run(void *targ)
       while (SDL_PollEvent(&sdlEvent)) {
         if (sdlEvent.type == SDL_QUIT) {
           fprintf(stderr,"[QUIT] Quit signal received!\n");
-          SDL_FreeSurface(screen);
-          SDL_DestroyWindow(window);
-          exit(0);
+          exitNow = 1;
         } else if (sdlEvent.type == SDL_MOUSEBUTTONDOWN) {
           switch (sdlEvent.button.button) {
             case SDL_BUTTON_LEFT:
@@ -1041,6 +1041,6 @@ int main(int argc,char **argv)
   SDL_FreeSurface(screen);
   SDL_DestroyWindow(window);
 #endif /* USE_SDL */
-  exit(0);
-  return 0; /* Make compiler shut up */
+
+  return 0;
 }
