@@ -205,13 +205,6 @@
  *
  * To get both in seperate files.
  *
- * <plug>
- * Be sure to visit http://www.greythumb.com/blog for your dose of
- * technobiology related news. Also, if you're ever in the Boston
- * area, visit http://www.greythumb.com/bostonalife to find out when
- * our next meeting is!
- * </plug>
- *
  * Have fun!
  */
 
