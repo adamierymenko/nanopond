@@ -216,12 +216,12 @@
  * info while slowing down the simulation. Higher values will give less
  * frequent updates. */
 /* This is also the frequency of screen refreshes if SDL is enabled. */
-#define REPORT_FREQUENCY 100000
+#define REPORT_FREQUENCY 200000
 
 /* Mutation rate -- range is from 0 (none) to 0xffffffff (all mutations!) */
 /* To get it from a float probability from 0.0 to 1.0, multiply it by
  * 4294967295 (0xffffffff) and round. */
-#define MUTATION_RATE 21475 /* p=~0.000005 */
+#define MUTATION_RATE 5000
 
 /* How frequently should random cells / energy be introduced?
  * Making this too high makes things very chaotic. Making it too low
@@ -229,12 +229,12 @@
 #define INFLOW_FREQUENCY 100
 
 /* Base amount of energy to introduce per INFLOW_FREQUENCY ticks */
-#define INFLOW_RATE_BASE 4000
+#define INFLOW_RATE_BASE 600
 
 /* A random amount of energy between 0 and this is added to
  * INFLOW_RATE_BASE when energy is introduced. Comment this out for
  * no variation in inflow rate. */
-#define INFLOW_RATE_VARIATION 8000
+#define INFLOW_RATE_VARIATION 1000
 
 /* Size of pond in X and Y dimensions. */
 #define POND_SIZE_X 800
@@ -242,12 +242,12 @@
 
 /* Depth of pond in four-bit codons -- this is the maximum
  * genome size. This *must* be a multiple of 16! */
-#define POND_DEPTH 512
+#define POND_DEPTH 1024
 
 /* This is the divisor that determines how much energy is taken
  * from cells when they try to KILL a viable cell neighbor and
  * fail. Higher numbers mean lower penalties. */
-#define FAILED_KILL_PENALTY 2
+#define FAILED_KILL_PENALTY 3
 
 /* Define this to use SDL. To use SDL, you must have SDL headers
  * available and you must link with the SDL library when you compile. */
@@ -895,6 +895,7 @@ static void *run(void *targ)
 				tmpptr->parentID = pptr->ID;
 				tmpptr->lineage = pptr->lineage; /* Lineage is copied in offspring */
 				tmpptr->generation = pptr->generation + 1;
+
 				for(i=0;i<POND_DEPTH_SYSWORDS;++i)
 					tmpptr->genome[i] = outputBuf[i];
 			}
