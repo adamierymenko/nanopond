@@ -218,6 +218,11 @@
 /* This is also the frequency of screen refreshes if SDL is enabled. */
 #define REPORT_FREQUENCY 200000
 
+/* Frequency of polling of UI and window control events, this allows us
+ * a more responsive experience without slowing the simulation down with
+ * overly-frequent display refreshes */
+#define UI_POLL_FREQUENCY REPORT_FREQUENCY / 200
+
 /* Mutation rate -- range is from 0 (none) to 0xffffffff (all mutations!) */
 /* To get it from a float probability from 0.0 to 1.0, multiply it by
  * 4294967295 (0xffffffff) and round. */
@@ -608,35 +613,47 @@ static void *run(void *targ)
 		/* Increment clock and run reports periodically */
 		/* Clock is incremented at the start, so it starts at 1 */
 		++clock;
+
 		if ((threadNo == 0)&&(!(clock % REPORT_FREQUENCY))) {
 			doReport(clock);
 			/* SDL display is also refreshed every REPORT_FREQUENCY */
 #ifdef USE_SDL
-			while (SDL_PollEvent(&sdlEvent)) {
-				if (sdlEvent.type == SDL_QUIT) {
-					fprintf(stderr,"[QUIT] Quit signal received!\n");
-					exitNow = 1;
-				} else if (sdlEvent.type == SDL_MOUSEBUTTONDOWN) {
-					switch (sdlEvent.button.button) {
-						case SDL_BUTTON_LEFT:
-							fprintf(stderr,"[INTERFACE] Genome of cell at (%d, %d):\n",sdlEvent.button.x, sdlEvent.button.y);
-							dumpCell(stderr, &pond[sdlEvent.button.x][sdlEvent.button.y]);
-							break;
-						case SDL_BUTTON_RIGHT:
-							colorScheme = (colorScheme + 1) % MAX_COLOR_SCHEME;
-							fprintf(stderr,"[INTERFACE] Switching to color scheme \"%s\".\n",colorSchemeName[colorScheme]);
-							for (y=0;y<POND_SIZE_Y;++y) {
-								for (x=0;x<POND_SIZE_X;++x)
-									((uint8_t *)screen->pixels)[x + (y * sdlPitch)] = getColor(&pond[x][y]);
-							}
-							break;
-					}
-				}
-			}
 			SDL_BlitSurface(screen, NULL, winsurf, NULL);
 			SDL_UpdateWindowSurface(window);
 #endif /* USE_SDL */
 		}
+
+#ifdef USE_SDL
+		/* SDL UI event polling is done every UI_POLL_FREQUENCY,
+		this was separated from the reporting and display update
+		code (below) since we don't want to increase the display
+		refresh rate, but we also don't want an unresponsive
+		window and controls. */
+		if ((threadNo == 0)&&(!(clock % UI_POLL_FREQUENCY))){
+			//fprintf(stderr,"polling events, clock=%d\n", clock);
+			while (SDL_PollEvent(&sdlEvent)) {
+					if (sdlEvent.type == SDL_QUIT) {
+						fprintf(stderr,"[QUIT] Quit signal received!\n");
+						exitNow = 1;
+					} else if (sdlEvent.type == SDL_MOUSEBUTTONDOWN) {
+						switch (sdlEvent.button.button) {
+							case SDL_BUTTON_LEFT:
+								fprintf(stderr,"[INTERFACE] Genome of cell at (%d, %d):\n",sdlEvent.button.x, sdlEvent.button.y);
+								dumpCell(stderr, &pond[sdlEvent.button.x][sdlEvent.button.y]);
+								break;
+							case SDL_BUTTON_RIGHT:
+								colorScheme = (colorScheme + 1) % MAX_COLOR_SCHEME;
+								fprintf(stderr,"[INTERFACE] Switching to color scheme \"%s\".\n",colorSchemeName[colorScheme]);
+								for (y=0;y<POND_SIZE_Y;++y) {
+									for (x=0;x<POND_SIZE_X;++x)
+										((uint8_t *)screen->pixels)[x + (y * sdlPitch)] = getColor(&pond[x][y]);
+								}
+								break;
+						}
+					}
+				}
+		}
+#endif /* USE_SDL */
 
 		/* Introduce a random cell somewhere with a given energy level */
 		/* This is called seeding, and introduces both energy and
